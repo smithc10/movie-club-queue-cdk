@@ -4,13 +4,9 @@ import * as cdk from "aws-cdk-lib";
 import { MovieClubStack } from "../lib/cdk-stack";
 
 const app = new cdk.App();
-
-new MovieClubStack(app, "MovieClubStack", {
+new MovieClubStack(app, "movieClubStack", {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: process.env.CDK_DEFAULT_REGION || "us-west-2",
+    region: process.env.CDK_DEFAULT_REGION || "us-east-1",
   },
-  description: "Movie Club movie schedule management infrastructure",
 });
-
-app.synth();
