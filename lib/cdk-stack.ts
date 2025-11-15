@@ -20,7 +20,9 @@ export class MovieClubStack extends cdk.Stack {
       },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Keep data if stack is deleted
-      pointInTimeRecovery: true, // Enable backups
+      pointInTimeRecoverySpecification: {
+        pointInTimeRecoveryEnabled: true,
+      }, // Enable backups
     });
 
     // Add GSI for querying by discussion_date
