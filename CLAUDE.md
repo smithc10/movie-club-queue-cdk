@@ -13,10 +13,7 @@ Movie Club Queue CDK - AWS infrastructure as code for a movie club scheduling sy
 - DynamoDB for data storage
 - AWS Lambda for backend logic
 - API Gateway for REST API
-- CloudFront + S3 for frontend hosting
-- Route 53 for DNS management
-- AWS WAF for security
-- ACM for SSL/TLS certificates
+- AWS Amplify Hosting for frontend (planned)
 - Secrets Manager for TMDb API key
 
 **Workspace Structure:**
@@ -52,63 +49,12 @@ Movie Club Queue CDK - AWS infrastructure as code for a movie club scheduling sy
 
 ### Entry Point
 The CDK app entry point is `bin/cdk.ts` (configured in cdk.json):
-- Deploys **two stacks** in different regions:
-  - `MovieClubFrontendStack` in us-east-1 (CloudFront + ACM requirement)
-  - `MovieClubStack` in us-west-2 (or `CDK_DEFAULT_REGION`)
-- Cross-region references enabled for shared resources (Route 53, ACM)
+- Deploys to us-west-2 by default (or `CDK_DEFAULT_REGION` if set)
+- Stack ID: "MovieClubStack"
 
-### Stack Structure
+### Stack Structure (lib/cdk-stack.ts)
 
-#### Frontend Stack (lib/frontend-stack.ts)
-
-The `MovieClubFrontendStack` manages frontend hosting and DNS:
-
-**Deployed Resources:**
-1. **S3 Bucket** - Frontend assets storage
-   - Private bucket with versioning enabled
-   - Accessed via CloudFront Origin Access Control (OAC)
-   - Lifecycle policy: delete old versions after 90 days
-   - Separate bucket for CloudFront logs
-
-2. **CloudFront Distribution** - CDN
-   - Custom domain: `movieclubqueue.com` and `www.movieclubqueue.com`
-   - TLS 1.2+ only, HTTP → HTTPS redirect
-   - Security headers via CloudFront Function
-   - SPA routing (404/403 → index.html)
-   - Caching optimized for static assets
-   - Integrated with AWS WAF
-
-3. **Route 53 Hosted Zone** - DNS management
-   - Manages DNS for `movieclubqueue.com`
-   - A records for apex domain and www subdomain
-   - A record for API subdomain (`api.movieclubqueue.com`)
-
-4. **ACM Certificate** - SSL/TLS
-   - Covers `movieclubqueue.com`, `www.movieclubqueue.com`, and `*.movieclubqueue.com`
-   - DNS validation (automated)
-   - Must be in us-east-1 for CloudFront
-
-5. **AWS WAF Web ACL** - Security
-   - AWS Managed Rules: Core Rule Set
-   - AWS Managed Rules: Known Bad Inputs
-   - Rate limiting: 2000 requests per 5 minutes per IP
-   - CloudWatch metrics enabled
-
-6. **IAM User** - GitHub Actions deployment
-   - User: `movie-club-github-actions`
-   - Permissions: S3 read/write, CloudFront invalidation
-
-**Security Headers (via CloudFront Function):**
-- `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `X-XSS-Protection: 1; mode=block`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Content-Security-Policy` (configured for frontend needs)
-
-#### Backend Stack (lib/cdk-stack.ts)
-
-The `MovieClubStack` defines backend API infrastructure:
+The `MovieClubStack` defines infrastructure in a phased approach:
 
 **Currently Deployed:**
 1. **DynamoDB Table** (`club-schedule`)
@@ -143,20 +89,20 @@ The `MovieClubStack` defines backend API infrastructure:
 
 5. **API Gateway REST API:**
    - Stage: v1
-   - **Custom Domain:** `api.movieclubqueue.com` (optional, configured via frontend stack)
    - **Public endpoints:** 
      - GET /movies - Retrieve movie schedule (no auth required)
    - **Secured endpoints:** 
      - POST /movies - Add movie to queue (API Key required)
    - Rate limiting: 100 req/s (burst: 200)
    - Monthly quota: 10,000 requests
-   - CORS enabled for `https://movieclubqueue.com` and `https://www.movieclubqueue.com`
+   - CORS enabled for all origins
    - X-Ray tracing enabled
    - CloudWatch logging disabled (requires account-level IAM role setup)
 
 **Not Yet Implemented:**
 - PUT/DELETE /movies endpoints (future CRUD operations)
 - GET /search endpoint (TMDb search - not needed yet, uses direct TMDb IDs)
+- AWS Amplify Hosting (frontend deployment)
 - Amazon Cognito (will replace API Key authentication)
 
 ### Data Model
@@ -223,78 +169,3 @@ Movies are stored with:
 - **No Unit Tests:** Team decided CDK tests were redundant; rely on synthesis + deployment validation
 - **Manual Testing:** Use API Gateway endpoints with tools like curl/Postman
 - **Observability:** X-Ray traces provide end-to-end request flow debugging
-
-## Deployment
-
-### Infrastructure Deployment
-
-1. **Deploy Frontend Stack** (must deploy first):
-   ```bash
-   npx cdk deploy MovieClubFrontendStack
-   ```
-   - Creates Route 53 hosted zone, ACM certificate, CloudFront, S3, WAF
-   - **Action Required:** Configure domain nameservers in Route 53 domain registration
-   - Wait for ACM certificate DNS validation to complete (~5-10 minutes)
-
-2. **Deploy Backend Stack:**
-   ```bash
-   npx cdk deploy MovieClubStack
-   ```
-   - Creates DynamoDB, Lambda functions, API Gateway with custom domain
-   - **Action Required:** Add TMDb API key to Secrets Manager
-   - **Action Required:** Retrieve API Key from AWS Console for admin operations
-
-3. **Both Stacks:**
-   ```bash
-   npx cdk deploy --all
-   ```
-
-See `DEPLOYMENT.md` for detailed deployment instructions.
-
-### Frontend Deployment (CI/CD)
-
-**GitHub Actions Workflow:** `.github/workflows/deploy-frontend.yml`
-
-**Location:** This workflow should be placed in the **frontend repository** (`movie-club-queue-website`)
-
-**Triggers:**
-- Automatic: Push to `main` branch
-- Manual: GitHub Actions UI
-
-**Required GitHub Secrets** (in frontend repository):
-- `AWS_ACCESS_KEY_ID` - IAM user access key (movie-club-github-actions)
-- `AWS_SECRET_ACCESS_KEY` - IAM user secret key
-- `S3_BUCKET_NAME` - From CDK output: `MovieClubFrontendBucket`
-- `CLOUDFRONT_DISTRIBUTION_ID` - From CDK output: `MovieClubDistributionId`
-
-**Workflow Steps:**
-1. Checkout frontend code
-2. Install dependencies (`npm ci`)
-3. Build Vite app (`npm run build`)
-4. Sync `dist/` to S3 with caching headers
-5. Invalidate CloudFront cache
-
-**Manual Deployment Alternative:**
-```bash
-# Build frontend
-cd movie-club-queue-website
-npm run build
-
-# Deploy to S3
-aws s3 sync dist/ s3://movieclubqueue.com-frontend --delete
-
-# Invalidate CloudFront
-aws cloudfront create-invalidation \
-  --distribution-id DISTRIBUTION_ID \
-  --paths "/*"
-```
-
-### URLs
-- **Frontend:** https://movieclubqueue.com (and https://www.movieclubqueue.com)
-- **API:** https://api.movieclubqueue.com (or default API Gateway URL if custom domain not configured)
-
-### Monitoring
-- **CloudFront Logs:** S3 bucket `movieclubqueue.com-cloudfront-logs`
-- **Lambda Logs:** CloudWatch `/aws/lambda/MovieClubStack-*`
-- **X-Ray Traces:** AWS X-Ray console (us-west-2)
-- **WAF Metrics:** CloudWatch (us-east-1)
