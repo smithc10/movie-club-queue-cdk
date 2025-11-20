@@ -10,24 +10,19 @@ export const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500";
  */
 export async function fetchMovieFromTmdb(
   tmdbId: number,
-  apiKey: string
+  apiKey: string,
 ): Promise<TMDbMovieResponse> {
-  const url = `${TMDB_API_BASE_URL}/movie/${tmdbId}`;
+  const url = `${TMDB_API_BASE_URL}/movie/${tmdbId}?api_key=${apiKey}`;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    const response = await fetch(url);
 
     if (!response.ok) {
       if (response.status === 404) {
         throw new MovieNotFoundError(tmdbId);
       }
       throw new Error(
-        `TMDb API error: ${response.status} ${response.statusText}`
+        `TMDb API error: ${response.status} ${response.statusText}`,
       );
     }
 
