@@ -20,7 +20,9 @@ export class MovieClubStack extends cdk.Stack {
       },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN, // Keep data if stack is deleted
-      pointInTimeRecovery: true, // Enable backups
+      pointInTimeRecoverySpecification: {
+        pointInTimeRecoveryEnabled: true,
+      }, // Enable backups
     });
 
     // Add GSI for querying by discussion_date
@@ -70,136 +72,141 @@ export class MovieClubStack extends cdk.Stack {
     // ===== STEP 4: Lambda Functions =====
 
     // Lambda: Get Schedule (GET /movies)
-    // const getScheduleFunction = new NodejsFunction(
-    //   this,
-    //   "GetScheduleFunction",
-    //   {
-    //     runtime: lambda.Runtime.NODEJS_20_X,
-    //     handler: "handler",
-    //     entry: "./lambda/get-schedule/index.ts",
-    //     role: lambdaRole,
-    //     environment: commonEnv,
-    //     timeout: cdk.Duration.seconds(30), // Longer timeout for TMDb enrichment
-    //     memorySize: 512,
-    //   },
-    // );
+    const getScheduleFunction = new NodejsFunction(
+      this,
+      "GetScheduleFunction",
+      {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: "handler",
+        entry: "./api/get-schedule/index.ts",
+        role: lambdaRole,
+        environment: commonEnv,
+        timeout: cdk.Duration.seconds(30), // Longer timeout for TMDb enrichment
+        memorySize: 512,
+        tracing: lambda.Tracing.ACTIVE, // Enable X-Ray tracing for debugging
+      },
+    );
 
     // Lambda: Add Movie (POST /movies)
-    // const addMovieFunction = new NodejsFunction(this, "AddMovieFunction", {
-    //   runtime: lambda.Runtime.NODEJS_20_X,
-    //   handler: "handler",
-    //   entry: "./lambda/add-movie/index.ts",
-    //   role: lambdaRole,
-    //   environment: commonEnv,
-    //   timeout: cdk.Duration.seconds(10),
-    // });
+    const addMovieFunction = new NodejsFunction(this, "AddMovieFunction", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "handler",
+      entry: "./api/add-movie/index.ts",
+      role: lambdaRole,
+      environment: commonEnv,
+      timeout: cdk.Duration.seconds(10),
+      tracing: lambda.Tracing.ACTIVE, // Enable X-Ray tracing for debugging
+    });
 
     // ===== STEP 5: API Gateway =====
-    // const api = new apigateway.RestApi(this, "MovieClubAPI", {
-    //   restApiName: "Movie Club Schedule API",
-    //   description:
-    //     "API for managing and viewing the weekly movie club discussion queue",
-    //   deployOptions: {
-    //     stageName: "v1",
-    //     throttlingRateLimit: 100,
-    //     throttlingBurstLimit: 200,
-    //     loggingLevel: apigateway.MethodLoggingLevel.INFO,
-    //     dataTraceEnabled: true,
-    //   },
-    //   defaultCorsPreflightOptions: {
-    //     allowOrigins: apigateway.Cors.ALL_ORIGINS,
-    //     allowMethods: apigateway.Cors.ALL_METHODS,
-    //     allowHeaders: ["Content-Type", "X-Api-Key", "Authorization"],
-    //   },
-    // });
+    const api = new apigateway.RestApi(this, "MovieClubAPI", {
+      restApiName: "Movie Club Schedule API",
+      description:
+        "API for managing and viewing the weekly movie club discussion queue",
+      deployOptions: {
+        stageName: "v1",
+        throttlingRateLimit: 100,
+        throttlingBurstLimit: 200,
+        tracingEnabled: true, // Enable X-Ray tracing for API Gateway
+        // CloudWatch logging disabled - requires account-level IAM role setup
+        // To enable: set up CloudWatch role via AWS Console first
+        // loggingLevel: apigateway.MethodLoggingLevel.INFO,
+        // dataTraceEnabled: true,
+      },
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: ["Content-Type", "X-Api-Key", "Authorization"],
+      },
+    });
 
-    // // API Key for write operations (temporary - will be replaced with Cognito)
-    // const apiKey = api.addApiKey("MovieClubAPIKey", {
-    //   apiKeyName: "movie-club-admin-key",
-    //   description: "API Key for admin write operations (temporary)",
-    // });
+    // API Key for write operations (temporary - will be replaced with Cognito)
+    const apiKey = api.addApiKey("MovieClubAPIKey", {
+      apiKeyName: "movie-club-admin-key",
+      description: "API Key for admin write operations (temporary)",
+    });
 
-    // // Usage Plan
-    // const usagePlan = api.addUsagePlan("MovieClubUsagePlan", {
-    //   name: "StandardUsage",
-    //   throttle: {
-    //     rateLimit: 50,
-    //     burstLimit: 100,
-    //   },
-    //   quota: {
-    //     limit: 10000,
-    //     period: apigateway.Period.MONTH,
-    //   },
-    // });
+    // Usage Plan
+    const usagePlan = api.addUsagePlan("MovieClubUsagePlan", {
+      name: "StandardUsage",
+      throttle: {
+        rateLimit: 50,
+        burstLimit: 100,
+      },
+      quota: {
+        limit: 10000,
+        period: apigateway.Period.MONTH,
+      },
+    });
 
-    // usagePlan.addApiKey(apiKey);
-    // usagePlan.addApiStage({ stage: api.deploymentStage });
+    usagePlan.addApiKey(apiKey);
+    usagePlan.addApiStage({ stage: api.deploymentStage });
 
-    // // ===== API Endpoints =====
+    // ===== API Endpoints =====
 
-    // // /movies endpoint
-    // const movies = api.root.addResource("movies");
+    // /movies endpoint
+    const movies = api.root.addResource("movies");
 
-    // // GET /movies (Public - retrieve full schedule)
-    // movies.addMethod(
-    //   "GET",
-    //   new apigateway.LambdaIntegration(getScheduleFunction),
-    //   {
-    //     methodResponses: [
-    //       {
-    //         statusCode: "200",
-    //         responseModels: {
-    //           "application/json": apigateway.Model.EMPTY_MODEL,
-    //         },
-    //       },
-    //       {
-    //         statusCode: "500",
-    //       },
-    //     ],
-    //   },
-    // );
+    // GET /movies (Public - retrieve full schedule)
+    movies.addMethod(
+      "GET",
+      new apigateway.LambdaIntegration(getScheduleFunction),
+      {
+        methodResponses: [
+          {
+            statusCode: "200",
+            responseModels: {
+              "application/json": apigateway.Model.EMPTY_MODEL,
+            },
+          },
+          {
+            statusCode: "500",
+          },
+        ],
+      },
+    );
 
-    // // POST /movies (Secured with API key - add movie to queue)
-    // movies.addMethod(
-    //   "POST",
-    //   new apigateway.LambdaIntegration(addMovieFunction),
-    //   {
-    //     apiKeyRequired: true,
-    //     methodResponses: [
-    //       {
-    //         statusCode: "201",
-    //         responseModels: {
-    //           "application/json": apigateway.Model.EMPTY_MODEL,
-    //         },
-    //       },
-    //       {
-    //         statusCode: "400",
-    //       },
-    //       {
-    //         statusCode: "500",
-    //       },
-    //     ],
-    //   },
-    // );
+    // POST /movies (Secured with API key - add movie to queue)
+    movies.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(addMovieFunction),
+      {
+        apiKeyRequired: true,
+        methodResponses: [
+          {
+            statusCode: "201",
+            responseModels: {
+              "application/json": apigateway.Model.EMPTY_MODEL,
+            },
+          },
+          {
+            statusCode: "400",
+          },
+          {
+            statusCode: "500",
+          },
+        ],
+      },
+    );
 
     // ===== Outputs =====
-    // new cdk.CfnOutput(this, "APIEndpoint", {
-    //   value: api.url,
-    //   description: "API Gateway endpoint URL",
-    //   exportName: "MovieClubAPIEndpoint",
-    // });
+    new cdk.CfnOutput(this, "APIEndpoint", {
+      value: api.url,
+      description: "API Gateway endpoint URL",
+      exportName: "MovieClubAPIEndpoint",
+    });
 
-    // new cdk.CfnOutput(this, "APIId", {
-    //   value: api.restApiId,
-    //   description: "API Gateway ID for OpenAPI spec",
-    //   exportName: "MovieClubAPIId",
-    // });
+    new cdk.CfnOutput(this, "APIId", {
+      value: api.restApiId,
+      description: "API Gateway ID for OpenAPI spec",
+      exportName: "MovieClubAPIId",
+    });
 
-    // new cdk.CfnOutput(this, "APIKeyId", {
-    //   value: apiKey.keyId,
-    //   description: "API Key ID (retrieve value from AWS Console)",
-    //   exportName: "MovieClubAPIKeyId",
-    // });
+    new cdk.CfnOutput(this, "APIKeyId", {
+      value: apiKey.keyId,
+      description: "API Key ID (retrieve value from AWS Console)",
+      exportName: "MovieClubAPIKeyId",
+    });
 
     new cdk.CfnOutput(this, "DynamoDBTableName", {
       value: moviesTable.tableName,

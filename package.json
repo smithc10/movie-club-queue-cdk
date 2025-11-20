@@ -7,10 +7,11 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
-    "test": "jest",
+    "test": "npx cdk synth",
     "cdk": "cdk"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.7.9",
     "aws-cdk": "2.1031.1",
@@ -21,10 +22,7 @@
     "typescript": "~5.6.3"
   },
   "dependencies": {
-    "@aws-cdk/aws-amplify-alpha": "^2.223.0-alpha.0",
-    "aws": "^0.0.3-2",
     "aws-cdk-lib": "^2.223.0",
-    "constructs": "^10.4.3",
-    "python": "^0.0.4"
+    "constructs": "^10.4.3"
   }
 }
