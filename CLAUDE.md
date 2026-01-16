@@ -13,7 +13,10 @@ Movie Club Queue CDK - AWS infrastructure as code for a movie club scheduling sy
 - DynamoDB for data storage
 - AWS Lambda for backend logic
 - API Gateway for REST API
-- AWS Amplify Hosting for frontend (planned)
+- CloudFront + S3 for frontend hosting
+- Route 53 for DNS management
+- AWS WAF for security
+- ACM for SSL/TLS certificates
 - Secrets Manager for TMDb API key
 
 **Workspace Structure:**
@@ -49,12 +52,63 @@ Movie Club Queue CDK - AWS infrastructure as code for a movie club scheduling sy
 
 ### Entry Point
 The CDK app entry point is `bin/cdk.ts` (configured in cdk.json):
-- Deploys to us-west-2 by default (or `CDK_DEFAULT_REGION` if set)
-- Stack ID: "MovieClubStack"
+- Deploys **two stacks** in different regions:
+  - `MovieClubQueueWebsiteStack` in us-east-1 (CloudFront + ACM requirement)
+  - `MovieClubQueueApiStack` in us-west-2 (or `CDK_DEFAULT_REGION`)
+- Cross-region references enabled for shared resources (Route 53, ACM)
 
-### Stack Structure (lib/cdk-stack.ts)
+### Stack Structure
 
-The `MovieClubStack` defines infrastructure in a phased approach:
+#### Website Stack (lib/website-stack.ts)
+
+The `MovieClubQueueWebsiteStack` manages frontend hosting and DNS:
+
+**Deployed Resources:**
+1. **S3 Bucket** - Frontend assets storage
+   - Private bucket with versioning enabled
+   - Accessed via CloudFront Origin Access Control (OAC)
+   - Lifecycle policy: delete old versions after 90 days
+   - Separate bucket for CloudFront logs
+
+2. **CloudFront Distribution** - CDN
+   - Custom domain: `movieclubqueue.com` and `www.movieclubqueue.com`
+   - TLS 1.2+ only, HTTP → HTTPS redirect
+   - Security headers via CloudFront Function
+   - SPA routing (404/403 → index.html)
+   - Caching optimized for static assets
+   - Integrated with AWS WAF
+
+3. **Route 53 Hosted Zone** - DNS management
+   - Manages DNS for `movieclubqueue.com`
+   - A records for apex domain and www subdomain
+   - A record for API subdomain (`api.movieclubqueue.com`)
+
+4. **ACM Certificate** - SSL/TLS
+   - Covers `movieclubqueue.com`, `www.movieclubqueue.com`, and `*.movieclubqueue.com`
+   - DNS validation (automated)
+   - Must be in us-east-1 for CloudFront
+
+5. **AWS WAF Web ACL** - Security
+   - AWS Managed Rules: Core Rule Set
+   - AWS Managed Rules: Known Bad Inputs
+   - Rate limiting: 2000 requests per 5 minutes per IP
+   - CloudWatch metrics enabled
+
+6. **IAM User** - GitHub Actions deployment
+   - User: `movie-club-github-actions`
+   - Permissions: S3 read/write, CloudFront invalidation
+
+**Security Headers (via CloudFront Function):**
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Content-Security-Policy` (configured for frontend needs)
+
+#### API Stack (lib/api-stack.ts)
+
+The `MovieClubQueueApiStack` defines backend API infrastructure:
 
 **Currently Deployed:**
 1. **DynamoDB Table** (`club-schedule`)
@@ -89,20 +143,20 @@ The `MovieClubStack` defines infrastructure in a phased approach:
 
 5. **API Gateway REST API:**
    - Stage: v1
+   - **Custom Domain:** `api.movieclubqueue.com` (optional, configured via frontend stack)
    - **Public endpoints:** 
      - GET /movies - Retrieve movie schedule (no auth required)
    - **Secured endpoints:** 
      - POST /movies - Add movie to queue (API Key required)
    - Rate limiting: 100 req/s (burst: 200)
    - Monthly quota: 10,000 requests
-   - CORS enabled for all origins
+   - CORS enabled for `https://movieclubqueue.com` and `https://www.movieclubqueue.com`
    - X-Ray tracing enabled
    - CloudWatch logging disabled (requires account-level IAM role setup)
 
 **Not Yet Implemented:**
 - PUT/DELETE /movies endpoints (future CRUD operations)
 - GET /search endpoint (TMDb search - not needed yet, uses direct TMDb IDs)
-- AWS Amplify Hosting (frontend deployment)
 - Amazon Cognito (will replace API Key authentication)
 
 ### Data Model
@@ -169,3 +223,59 @@ Movies are stored with:
 - **No Unit Tests:** Team decided CDK tests were redundant; rely on synthesis + deployment validation
 - **Manual Testing:** Use API Gateway endpoints with tools like curl/Postman
 - **Observability:** X-Ray traces provide end-to-end request flow debugging
+
+## Deployment
+
+### Infrastructure Deployment
+
+1. **Deploy Website Stack** (must deploy first):
+   ```bash
+   npx cdk deploy MovieClubQueueWebsiteStack
+   ```
+   - Creates Route 53 hosted zone, ACM certificate, CloudFront, S3, WAF
+   - **Action Required:** Configure domain nameservers in Route 53 domain registration
+   - Wait for ACM certificate DNS validation to complete (~5-10 minutes)
+
+2. **Deploy API Stack:**
+   ```bash
+   npx cdk deploy MovieClubQueueApiStack
+   ```
+   - Creates DynamoDB, Lambda functions, API Gateway with custom domain
+   - **Action Required:** Add TMDb API key to Secrets Manager
+   - **Action Required:** Retrieve API Key from AWS Console for admin operations
+
+3. **Both Stacks:**
+   ```bash
+   npx cdk deploy --all
+   ```
+
+See `DEPLOYMENT.md` for detailed deployment instructions.
+
+### Frontend Deployment (CI/CD)
+
+**Note:** CI/CD deployment via GitHub Actions with OIDC federation will be implemented in a future PR. For now, use manual deployment.
+
+**Manual Deployment:**
+```bash
+# Build frontend
+cd movie-club-queue-website
+npm run build
+
+# Deploy to S3
+aws s3 sync dist/ s3://movieclubqueue.com-frontend --delete
+
+# Invalidate CloudFront
+aws cloudfront create-invalidation \
+  --distribution-id DISTRIBUTION_ID \
+  --paths "/*"
+```
+
+### URLs
+- **Frontend:** https://movieclubqueue.com (and https://www.movieclubqueue.com)
+- **API:** https://api.movieclubqueue.com (or default API Gateway URL if custom domain not configured)
+
+### Monitoring
+- **CloudFront Logs:** S3 bucket `movieclubqueue.com-cloudfront-logs`
+- **Lambda Logs:** CloudWatch `/aws/lambda/MovieClubQueueApiStack-*`
+- **X-Ray Traces:** AWS X-Ray console (us-west-2)
+- **WAF Metrics:** CloudWatch (us-east-1)
