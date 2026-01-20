@@ -5,10 +5,19 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as targets from "aws-cdk-lib/aws-route53-targets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 
-export class MovieClubStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+export interface MovieClubApiStackProps extends cdk.StackProps {
+  hostedZone: route53.IHostedZone;
+  certificate: acm.ICertificate;
+  apiDomainName: string; // e.g., "api.movieclubqueue.com"
+}
+
+export class MovieClubApiStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props: MovieClubApiStackProps) {
     super(scope, id, props);
 
     // ===== STEP 1: DynamoDB Table =====
@@ -141,6 +150,40 @@ export class MovieClubStack extends cdk.Stack {
 
     usagePlan.addApiKey(apiKey);
     usagePlan.addApiStage({ stage: api.deploymentStage });
+
+    // ===== Custom Domain for API Gateway =====
+    // Using EDGE endpoint type because the ACM certificate is in us-east-1 (required for CloudFront).
+    // EDGE-optimized APIs use CloudFront, which requires certificates in us-east-1.
+    // For REGIONAL endpoints, the certificate must be in the same region as the API.
+    // See: https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-edge-optimized-custom-domain-name.html
+    const customDomain = new apigateway.DomainName(this, "ApiCustomDomain", {
+      domainName: props.apiDomainName,
+      certificate: props.certificate,
+      securityPolicy: apigateway.SecurityPolicy.TLS_1_2,
+      endpointType: apigateway.EndpointType.EDGE,
+    });
+
+    // Map the custom domain to the API stage
+    customDomain.addBasePathMapping(api, {
+      basePath: "", // No base path, API available at api.movieclubqueue.com/
+      stage: api.deploymentStage,
+    });
+
+    // Create Route 53 A record for API subdomain
+    new route53.ARecord(this, "ApiARecord", {
+      zone: props.hostedZone,
+      recordName: props.apiDomainName,
+      target: route53.RecordTarget.fromAlias(
+        new targets.ApiGatewayDomain(customDomain),
+      ),
+      comment: "Alias to API Gateway custom domain",
+    });
+
+    new cdk.CfnOutput(this, "APICustomDomain", {
+      value: `https://${props.apiDomainName}`,
+      description: "API Gateway custom domain URL",
+      exportName: "MovieClubAPICustomDomain",
+    });
 
     // ===== API Endpoints =====
 
