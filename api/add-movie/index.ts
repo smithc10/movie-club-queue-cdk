@@ -28,8 +28,13 @@ const dynamoClient = new DynamoDBClient({});
 export const handler = async (
   event: APIGatewayProxyEvent,
 ): Promise<APIGatewayProxyResult> => {
+  // Extract user info from Cognito JWT claims
+  const claims = event.requestContext.authorizer?.claims;
+  const userEmail = claims?.email as string | undefined;
+
   console.log("POST /movies request received", {
     body: event.body,
+    user: userEmail,
   });
 
   try {
@@ -42,7 +47,7 @@ export const handler = async (
     const tmdbMovie = await fetchMovieFromTmdb(body.tmdb_id, tmdbApiKey);
 
     // Create movie item with TMDb data
-    const movieItem = createMovieItem(body, tmdbMovie);
+    const movieItem = createMovieItem(body, tmdbMovie, userEmail);
 
     // Store in DynamoDB (with conditional check to prevent duplicates)
     await saveMovieToDynamoDB(dynamoClient, movieItem);
@@ -162,6 +167,7 @@ function validateRequest(body: AddMovieRequest): void {
 function createMovieItem(
   request: AddMovieRequest,
   tmdbMovie: TMDbMovieResponse,
+  addedBy?: string,
 ): MovieItem {
   const now = new Date().toISOString();
 
@@ -180,6 +186,7 @@ function createMovieItem(
     vote_average: tmdbMovie.vote_average,
     vote_count: tmdbMovie.vote_count,
     notes: request.notes,
+    added_by: addedBy,
     created_at: now,
     updated_at: now,
   };
