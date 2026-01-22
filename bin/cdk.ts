@@ -36,6 +36,7 @@ const apiStack = new MovieClubApiStack(app, "MovieClubQueueApiStack", {
   hostedZone: websiteStack.hostedZone,
   certificate: websiteStack.certificate,
   apiDomainName: apiDomainName,
+  domainName: domainName, // For Cognito callback URLs
   crossRegionReferences: true, // Allow cross-region stack references
 });
 
