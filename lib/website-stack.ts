@@ -86,7 +86,7 @@ export class MovieClubWebsiteStack extends cdk.Stack {
             override: true,
           },
           contentSecurityPolicy: {
-            contentSecurityPolicy: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; font-src 'self' data:; connect-src 'self' https://api.${domainName} https://cognito-idp.us-west-2.amazonaws.com https://*.auth.us-west-2.amazoncognito.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://*.auth.us-west-2.amazoncognito.com; object-src 'none';`,
+            contentSecurityPolicy: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://image.tmdb.org; font-src 'self' data:; connect-src 'self' https://api.${domainName}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';`,
             override: true,
           },
         },

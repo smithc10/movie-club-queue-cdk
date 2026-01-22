@@ -8,14 +8,12 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
-import * as cognito from "aws-cdk-lib/aws-cognito";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 
 export interface MovieClubApiStackProps extends cdk.StackProps {
   hostedZone: route53.IHostedZone;
   certificate: acm.ICertificate;
   apiDomainName: string; // e.g., "api.movieclubqueue.com"
-  domainName: string; // e.g., "movieclubqueue.com" (for Cognito callback URLs)
 }
 
 export class MovieClubApiStack extends cdk.Stack {
@@ -57,101 +55,7 @@ export class MovieClubApiStack extends cdk.Stack {
       // Note: Value must be manually added via AWS Console or CLI after deployment
     });
 
-    // ===== STEP 3: Cognito User Pool =====
-    const userPool = new cognito.UserPool(this, "MovieClubUserPool", {
-      userPoolName: "movie-club-users",
-      selfSignUpEnabled: false, // Admin creates users
-      signInAliases: {
-        email: true,
-        username: false,
-      },
-      autoVerify: {
-        email: true,
-      },
-      standardAttributes: {
-        email: {
-          required: true,
-          mutable: true,
-        },
-      },
-      passwordPolicy: {
-        minLength: 8,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
-        requireSymbols: false,
-      },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: cdk.RemovalPolicy.RETAIN, // Keep users if stack deleted
-      mfa: cognito.Mfa.OPTIONAL,
-      mfaSecondFactor: {
-        sms: false,
-        otp: true,
-      },
-    });
-
-    // User Pool Client for frontend SPA
-    const userPoolClient = userPool.addClient("MovieClubWebClient", {
-      userPoolClientName: "movie-club-web-app",
-      authFlows: {
-        userPassword: true,
-        userSrp: true,
-      },
-      oAuth: {
-        flows: {
-          authorizationCodeGrant: true,
-          implicitCodeGrant: false,
-        },
-        scopes: [
-          cognito.OAuthScope.EMAIL,
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.PROFILE,
-        ],
-        callbackUrls: [
-          `https://${props.domainName}/callback`,
-          `https://www.${props.domainName}/callback`,
-          "http://localhost:5173/callback",
-        ],
-        logoutUrls: [
-          `https://${props.domainName}`,
-          `https://www.${props.domainName}`,
-          "http://localhost:5173",
-        ],
-      },
-      preventUserExistenceErrors: true,
-      generateSecret: false, // No secret for SPA (public client)
-      accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.hours(1),
-      refreshTokenValidity: cdk.Duration.days(30),
-    });
-
-    // Cognito Domain for Hosted UI
-    const cognitoDomain = userPool.addDomain("MovieClubCognitoDomain", {
-      cognitoDomain: {
-        domainPrefix: "movie-club-queue",
-      },
-    });
-
-    // Admin Group for users who can manage the movie queue
-    new cognito.CfnUserPoolGroup(this, "AdminGroup", {
-      userPoolId: userPool.userPoolId,
-      groupName: "admin",
-      description: "Club administrators who can manage the movie queue",
-      precedence: 0,
-    });
-
-    // Cognito Authorizer for API Gateway
-    const cognitoAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(
-      this,
-      "MovieClubAuthorizer",
-      {
-        cognitoUserPools: [userPool],
-        authorizerName: "movie-club-cognito-authorizer",
-        identitySource: "method.request.header.Authorization",
-      },
-    );
-
-    // ===== STEP 4: Lambda Execution Role =====
+    // ===== STEP 3: Lambda Execution Role =====
     const lambdaRole = new iam.Role(this, "MovieClubLambdaRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
       managedPolicies: [
@@ -225,6 +129,28 @@ export class MovieClubApiStack extends cdk.Stack {
       },
     });
 
+    // API Key for write operations (temporary - will be replaced with Cognito)
+    const apiKey = api.addApiKey("MovieClubAPIKey", {
+      apiKeyName: "movie-club-admin-key",
+      description: "API Key for admin write operations (temporary)",
+    });
+
+    // Usage Plan
+    const usagePlan = api.addUsagePlan("MovieClubUsagePlan", {
+      name: "StandardUsage",
+      throttle: {
+        rateLimit: 50,
+        burstLimit: 100,
+      },
+      quota: {
+        limit: 10000,
+        period: apigateway.Period.MONTH,
+      },
+    });
+
+    usagePlan.addApiKey(apiKey);
+    usagePlan.addApiStage({ stage: api.deploymentStage });
+
     // ===== Custom Domain for API Gateway =====
     // Using EDGE endpoint type because the ACM certificate is in us-east-1 (required for CloudFront).
     // EDGE-optimized APIs use CloudFront, which requires certificates in us-east-1.
@@ -283,13 +209,12 @@ export class MovieClubApiStack extends cdk.Stack {
       },
     );
 
-    // POST /movies (Secured with Cognito - add movie to queue)
+    // POST /movies (Secured with API key - add movie to queue)
     movies.addMethod(
       "POST",
       new apigateway.LambdaIntegration(addMovieFunction),
       {
-        authorizer: cognitoAuthorizer,
-        authorizationType: apigateway.AuthorizationType.COGNITO,
+        apiKeyRequired: true,
         methodResponses: [
           {
             statusCode: "201",
@@ -299,12 +224,6 @@ export class MovieClubApiStack extends cdk.Stack {
           },
           {
             statusCode: "400",
-          },
-          {
-            statusCode: "401",
-          },
-          {
-            statusCode: "403",
           },
           {
             statusCode: "500",
@@ -326,6 +245,12 @@ export class MovieClubApiStack extends cdk.Stack {
       exportName: "MovieClubAPIId",
     });
 
+    new cdk.CfnOutput(this, "APIKeyId", {
+      value: apiKey.keyId,
+      description: "API Key ID (retrieve value from AWS Console)",
+      exportName: "MovieClubAPIKeyId",
+    });
+
     new cdk.CfnOutput(this, "DynamoDBTableName", {
       value: moviesTable.tableName,
       description: "DynamoDB table name",
@@ -342,31 +267,6 @@ export class MovieClubApiStack extends cdk.Stack {
       value: this.region,
       description: "AWS Region",
       exportName: "MovieClubRegion",
-    });
-
-    // ===== Cognito Outputs =====
-    new cdk.CfnOutput(this, "UserPoolId", {
-      value: userPool.userPoolId,
-      description: "Cognito User Pool ID",
-      exportName: "MovieClubUserPoolId",
-    });
-
-    new cdk.CfnOutput(this, "UserPoolClientId", {
-      value: userPoolClient.userPoolClientId,
-      description: "Cognito User Pool Client ID",
-      exportName: "MovieClubUserPoolClientId",
-    });
-
-    new cdk.CfnOutput(this, "CognitoDomain", {
-      value: cognitoDomain.domainName,
-      description: "Cognito domain prefix",
-      exportName: "MovieClubCognitoDomain",
-    });
-
-    new cdk.CfnOutput(this, "CognitoHostedUIUrl", {
-      value: `https://${cognitoDomain.domainName}.auth.${this.region}.amazoncognito.com`,
-      description: "Cognito Hosted UI URL",
-      exportName: "MovieClubHostedUIUrl",
     });
   }
 }
